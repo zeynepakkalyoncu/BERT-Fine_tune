@@ -1,10 +1,7 @@
 # coding=utf-8
 
 import random
-import numpy as np
 import argparse
-
-import torch
 
 from util import *
 from eval import *
@@ -30,17 +27,8 @@ def train(args):
         last_epoch = 1
 
     train_dataset = DataGenerator(args.data_path, args.data_name, args.batch_size, tokenizer, "train", args.device,
-                                  args.data_format, add_url=False, padding=args.padding)
-    validate_dataset = DataGenerator(args.data_path, args.data_name, args.batch_size, tokenizer, "dev", args.device,
-                                     args.data_format, label_map=train_dataset.label_map, add_url=False, padding=args.padding)
-    test_dataset = DataGenerator(args.data_path, args.data_name, args.batch_size, tokenizer, "test", args.device,
-                                 args.data_format, label_map=train_dataset.label_map, add_url=False, padding=args.padding)
-    optimizer = init_optimizer(model, args.learning_rate, args.warmup_proportion, args.num_train_epochs,
-                               train_dataset.data_size, args.batch_size)
 
     model.train()
-    global_step = 0
-    best_score = 0
     print('training')
     for epoch in range(last_epoch, args.num_train_epochs + 1):
         print("epoch {} ............".format(epoch))
@@ -51,7 +39,6 @@ def train(args):
             if batch is None:
                 break
             tokens_tensor, segments_tensor, mask_tensor, label_tensor = batch[:4]
-            # del batch
             loss = model(tokens_tensor, segments_tensor, mask_tensor, label_tensor)
             loss.backward()
             tr_loss += loss.item()
@@ -62,6 +49,13 @@ def train(args):
             if args.eval_steps > 0 and step % args.eval_steps == 0:
                 print("step: {}".format(step))
                 best_score = eval_select(model, tokenizer, validate_dataset, test_dataset, args.pytorch_dump_path,
+                                         best_score, epoch, args.model_type)
+
+            step += 1
+
+        print("[train] loss: {}".format(tr_loss))
+        best_score = eval_select(model, tokenizer, validate_dataset, test_dataset, args.pytorch_dump_path, best_score,
+                                 epoch, args.model_type)
                                          best_score, epoch, args.model_type, step)
 
             step += 1
@@ -81,7 +75,6 @@ def train(args):
 
 
 def eval_select(model, tokenizer, validate_dataset, test_dataset, model_path, best_score, epoch, arch, step):
-    print('eval select')
     scores_dev = test(args, split="dev", model=model, tokenizer=tokenizer, test_dataset=validate_dataset)
     print_scores(scores_dev, mode="dev")
     scores_test = test(args, split="test", model=model, tokenizer=tokenizer, test_dataset=test_dataset)
@@ -98,8 +91,7 @@ def eval_select(model, tokenizer, validate_dataset, test_dataset, model_path, be
 
 def test(args, split="test", model=None, tokenizer=None, test_dataset=None):
     if model is None:
-        epoch, arch, model, tokenizer, scores, label_map, step = load_checkpoint(
-            args.pytorch_dump_path)
+        epoch, arch, model, tokenizer, scores, label_map = load_checkpoint(args.pytorch_dump_path)
         assert test_dataset is None
         print("Load {} set".format(split))
         test_dataset = DataGenerator(args.data_path, args.data_name, args.batch_size, tokenizer, split, args.device,
@@ -194,16 +186,14 @@ def test(args, split="test", model=None, tokenizer=None, test_dataset=None):
 
     f.close()
     pf.close()
-    # qrelf.close()
 
     torch.cuda.empty_cache()
 
     model.train()
 
     if args.data_format == "trec":
-        map, mrr, p30 = evaluate_trec(predictions_file=args.predict_path, \
-                                          # qrels_file=split + '.' + args.qrels_path)
-                                        qrels_file='./qrels.microblog.txt')
+        map, mrr, p30 = evaluate_trec(predictions_file=args.output_path2, \
+                                      qrels_file=split + '.' + args.qrels_path)
         return [["map", "mrr", "p30"], [map, mrr, p30]]
     elif args.data_format == "glue" or args.data_format == "regression":
         pearson_r, spearman_r = evaluate_glue(prediction_score_list, labels)
